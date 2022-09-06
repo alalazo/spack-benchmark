@@ -4,6 +4,7 @@
 # SPDX-License-Identifier: (Apache-2.0 OR MIT)
 import csv
 import glob
+import os
 import re
 import sys
 import warnings
@@ -11,6 +12,7 @@ import warnings
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import tqdm.contrib.concurrent
 
 import spack.cmd
 import spack.solver.asp as asp
@@ -28,6 +30,7 @@ def setup_parser(subparser):
     run.add_argument('-o', '--output', help='CSV output file', required=True)
     run.add_argument('--reuse', help='maximum reuse of buildcaches and installations', action='store_true')
     run.add_argument('--configs', help='comma separated clingo configurations', default='tweety')
+    run.add_argument('-n', '--nprocess', help='number of processes to use to produce the results', default=os.cpu_count(), type=int)
     run.add_argument('specfile', help='text file with one spec per line')
 
     plot = sp.add_parser('plot', help='plot results recorded in a CSV file')
@@ -37,6 +40,25 @@ def setup_parser(subparser):
     plot_type.add_argument('--histogram', action='store_true', help='histogram plot (execution time vs. number of packages)')
     plot.add_argument('csvfile', help='CSV file with timing data')
     plot.add_argument('-o', '--output', help='output image file', required=True)
+
+
+def process_single_item(inputs):
+    args, specs, idx, cf, i = inputs
+    control = asp.default_clingo_control()
+    control.configuration.configuration = cf
+    solver = spack.solver.asp.Solver()
+    setup = spack.solver.asp.SpackSolverSetup()
+    reusable_specs = solver._reusable_specs()
+    try:
+        sol_res, timer, solve_stat = solver.driver.solve(
+            setup, specs, reuse=reusable_specs, control=control
+        )
+        timer.stop()
+        time_by_phase = tuple(timer.phases[ph] for ph in SOLUTION_PHASES)
+    except Exception as e:
+        warnings.warn(str(e))
+        return None
+    return (specs[0].name, cf, i) +  time_by_phase + (timer.total, len(sol_res.possible_dependencies))
 
 
 def run(args):
@@ -59,29 +81,17 @@ def run(args):
     pkg_ls = [l.strip() for l in lines if l.strip()]
 
     # Perform the concretization tests
-    pkg_stats = []
+    input_list = []
     for idx, pkg in enumerate(pkg_ls):
-        
-        print('Processing "{0}" [{1}/{2}]'.format(pkg, idx + 1, len(pkg_ls)))
         specs = spack.cmd.parse_specs(pkg)
         for cf in configs:
-            control = asp.default_clingo_control()
-            control.configuration.configuration = cf
-
             for i in range(args.repetitions):
-                try:
-                    sol_res, timer, solve_stat = solver.driver.solve(
-                        setup, specs, reuse=reusable_specs, control=control
-                    )
-                    timer.stop()
-                    time_by_phase = tuple(timer.phases[ph] for ph in SOLUTION_PHASES)
-                    pkg_stats.append(
-                        (pkg, cf, i) +  time_by_phase + (timer.total, len(sol_res.possible_dependencies))
-                    )
-                except Exception as e:
-                    warnings.warn(str(e))
-                    pass
-
+                item = (args, specs, idx, cf, i)
+                input_list.append(item)
+    # Perform the concretization tests
+    pkg_stats = tqdm.contrib.concurrent.process_map(process_single_item, input_list, max_workers=args.nprocess, chunksize=1)
+    pkg_stats = [x for x in pkg_stats if x is not None]
+    
     # Write results to CSV file
     with open(args.output, "w", newline="") as f:
         writer = csv.writer(f)
@@ -165,13 +175,11 @@ def _plot_histogram(args):
                 timings[cf][ph].append(tdf[ph].median())
 
     for cf in cfg_ls:
-        fig, axs = plt.subplots(2, 3, sharey=True, tight_layout=True, figsize=(18,14), dpi=100)
+        fig, axs = plt.subplots(2, 2, sharey=True, tight_layout=True, figsize=(20,20), dpi=100)
         axes = list(axs.flatten())
-        n_bins = 100
+        n_bins = 150
 
         fig.suptitle(cf, fontsize=24)
-    
-        axes[5].remove()
         for i, ph in enumerate(SOLUTION_PHASES):
             solve_times = sorted(zip(pkg_ls, timings[cf][ph]), key=lambda x: x[1], reverse=True)
             tab_data = [[p, "{:.3f}".format(t)] for p, t in solve_times[0:5]]
