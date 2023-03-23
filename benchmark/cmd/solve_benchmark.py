@@ -17,63 +17,95 @@ import tqdm.contrib.concurrent
 import spack.cmd
 import spack.solver.asp as asp
 
-SOLUTION_PHASES = 'setup', 'load', 'ground', 'solve'
-VALID_CONFIGURATIONS = 'tweety', 'handy', 'trendy', 'many'
+SOLUTION_PHASES = "setup", "load", "ground", "solve"
+VALID_CONFIGURATIONS = "tweety", "handy", "trendy", "many"
 
 
 def setup_parser(subparser):
-    sp = subparser.add_subparsers(metavar='SUBCOMMAND', dest='subcommand')
-    
-    run = sp.add_parser('run', help='run benchmarks and produce a CSV file of timing results')
-    
-    run.add_argument('-r', '--repetitions', type=int, help='number of repetitions for each spec', default=1)
-    run.add_argument('-o', '--output', help='CSV output file', required=True)
-    run.add_argument('--reuse', help='maximum reuse of buildcaches and installations', action='store_true')
-    run.add_argument('--configs', help='comma separated clingo configurations', default='tweety')
-    run.add_argument('-n', '--nprocess', help='number of processes to use to produce the results', default=os.cpu_count(), type=int)
-    run.add_argument('specfile', help='text file with one spec per line')
+    sp = subparser.add_subparsers(metavar="SUBCOMMAND", dest="subcommand")
 
-    plot = sp.add_parser('plot', help='plot results recorded in a CSV file')
+    run = sp.add_parser("run", help="run benchmarks and produce a CSV file of timing results")
+
+    run.add_argument(
+        "-r",
+        "--repetitions",
+        type=int,
+        help="number of repetitions for each spec",
+        default=1,
+    )
+    run.add_argument("-o", "--output", help="CSV output file", required=True)
+    run.add_argument(
+        "--reuse",
+        help="maximum reuse of buildcaches and installations",
+        action="store_true",
+    )
+    run.add_argument("--configs", help="comma separated clingo configurations", default="tweety")
+    run.add_argument(
+        "-n",
+        "--nprocess",
+        help="number of processes to use to produce the results",
+        default=os.cpu_count(),
+        type=int,
+    )
+    run.add_argument("specfile", help="text file with one spec per line")
+
+    plot = sp.add_parser("plot", help="plot results recorded in a CSV file")
     plot_type = plot.add_mutually_exclusive_group()
-    plot_type.add_argument('--cdf', action='store_true', help='CDF plot (number of packages vs. execution time)')
-    plot_type.add_argument('--scatter', action='store_true', help='scatter plot (execution time vs. possible dependencies)')
-    plot_type.add_argument('--histogram', action='store_true', help='histogram plot (execution time vs. number of packages)')
-    plot.add_argument('csvfile', help='CSV file with timing data')
-    plot.add_argument('-o', '--output', help='output image file', required=True)
+    plot_type.add_argument(
+        "--cdf",
+        action="store_true",
+        help="CDF plot (number of packages vs. execution time)",
+    )
+    plot_type.add_argument(
+        "--scatter",
+        action="store_true",
+        help="scatter plot (execution time vs. possible dependencies)",
+    )
+    plot_type.add_argument(
+        "--histogram",
+        action="store_true",
+        help="histogram plot (execution time vs. number of packages)",
+    )
+    plot.add_argument("csvfile", help="CSV file with timing data")
+    plot.add_argument("-o", "--output", help="output image file", required=True)
 
 
 def process_single_item(inputs):
     args, specs, idx, cf, i = inputs
     control = asp.default_clingo_control()
-    control.configuration.configuration = cf
+    # control.configuration.configuration = cf
     solver = spack.solver.asp.Solver()
     setup = spack.solver.asp.SpackSolverSetup()
-    reusable_specs = solver._reusable_specs()
+    reusable_specs = solver._reusable_specs(specs)
     try:
         sol_res, timer, solve_stat = solver.driver.solve(
             setup, specs, reuse=reusable_specs, control=control
         )
         timer.stop()
-        time_by_phase = tuple(timer.phases[ph] for ph in SOLUTION_PHASES)
+        time_by_phase = tuple(timer.duration(ph) for ph in SOLUTION_PHASES)
     except Exception as e:
         warnings.warn(str(e))
         return None
-    return (specs[0].name, cf, i) +  time_by_phase + (timer.total, len(sol_res.possible_dependencies))
+
+    total = sum(time_by_phase)
+    return (specs[0].name, cf, i) + time_by_phase + (total, len(sol_res.possible_dependencies))
 
 
 def run(args):
-    configs = args.configs.split(',')
+    configs = args.configs.split(",")
     if any(x not in VALID_CONFIGURATIONS for x in configs):
-        print("Invalid configuration. Valid options are {0}".format(', '.join(VALID_CONFIGURATIONS)))
+        print(
+            "Invalid configuration. Valid options are {0}".format(", ".join(VALID_CONFIGURATIONS))
+        )
 
     # Warmup spack to ensure caches have been written, and clingo is ready
     # (we don't want to measure bootstrapping time)
-    specs = spack.cmd.parse_specs('hdf5')
+    specs = spack.cmd.parse_specs("hdf5")
     solver = spack.solver.asp.Solver()
     setup = spack.solver.asp.SpackSolverSetup()
 
     result, _, _ = solver.driver.solve(setup, specs, reuse=[])
-    reusable_specs = solver._reusable_specs()
+    reusable_specs = solver._reusable_specs(specs)
 
     # Read the list of specs to be analyzed
     with open(args.specfile, "r") as f:
@@ -89,9 +121,18 @@ def run(args):
                 item = (args, specs, idx, cf, i)
                 input_list.append(item)
     # Perform the concretization tests
-    pkg_stats = tqdm.contrib.concurrent.process_map(process_single_item, input_list, max_workers=args.nprocess, chunksize=1)
-    pkg_stats = [x for x in pkg_stats if x is not None]
-    
+    # pkg_stats = tqdm.contrib.concurrent.process_map(process_single_item, input_list, max_workers=args.nprocess, chunksize=1)
+
+    pkg_stats = []
+    for idx, item in enumerate(input_list):
+        print(f"{idx}/{len(input_list)} {item[1]}")
+        record = process_single_item(item)
+        if record is not None:
+            pkg_stats.append(record)
+
+    # pkg_stats = [process_single_item(item) for item in input_list]
+    # pkg_stats = [x for x in pkg_stats if x is not None]
+
     # Write results to CSV file
     with open(args.output, "w", newline="") as f:
         writer = csv.writer(f)
@@ -111,71 +152,105 @@ def _plot_cdf(args):
     df = pd.read_csv(
         args.csvfile,
         header=None,
-        names=['pkg', 'cfg', 'iter', 'setup', 'load', 'ground', 'solve', 'total', 'dep_len']
+        names=[
+            "pkg",
+            "cfg",
+            "iter",
+            "setup",
+            "load",
+            "ground",
+            "solve",
+            "total",
+            "dep_len",
+        ],
     )
     print(df.head())
 
-    cfg_ls = list(sorted(set(df['cfg'])))
-    pkg_ls = list(sorted(set(df['pkg'])))
+    cfg_ls = list(sorted(set(df["cfg"])))
+    pkg_ls = list(sorted(set(df["pkg"])))
 
-    fig, axs = plt.subplots(figsize=(6, 6), dpi=150)  
+    fig, axs = plt.subplots(figsize=(6, 6), dpi=150)
 
     for cfg in cfg_ls:
-        df_by_config = df[df['cfg'] == cfg]
-        times = df_by_config['total']
-        times.hist(cumulative=True, density=1, bins=100, ax=axs, label=cfg, histtype='step')
+        df_by_config = df[df["cfg"] == cfg]
+        times = df_by_config["total"]
+        times.hist(cumulative=True, density=1, bins=100, ax=axs, label=cfg, histtype="step")
 
-    axs.set_xlabel('Total Time [sec.]', fontsize=20)
-    axs.set_ylabel('Percentage of package', fontsize=20)
-    axs.legend(loc='upper left')
+    axs.set_xlabel("Total Time [sec.]", fontsize=20)
+    axs.set_ylabel("Percentage of package", fontsize=20)
+    axs.legend(loc="upper left")
     fig.savefig(args.output)
-    
+
 
 def _plot_scatter(args):
     df = pd.read_csv(
         args.csvfile,
         header=None,
-        names=['pkg', 'cfg', 'iter', 'setup', 'load', 'ground', 'solve', 'total', 'dep_len']
+        names=[
+            "pkg",
+            "cfg",
+            "iter",
+            "setup",
+            "load",
+            "ground",
+            "solve",
+            "total",
+            "dep_len",
+        ],
     )
     df_full = df
     print(df_full.head())
 
-    cfg_ls = list(sorted(set(df['cfg'])))
-    pkg_ls = list(sorted(set(df['pkg'])))
+    cfg_ls = list(sorted(set(df["cfg"])))
+    pkg_ls = list(sorted(set(df["pkg"])))
 
     timings = {}
     deps = []
 
     df_deps = df_full
 
-    fig, axs = plt.subplots(figsize=(6, 6), dpi=150)  
+    fig, axs = plt.subplots(figsize=(6, 6), dpi=150)
 
     df.plot.scatter(x="dep_len", y="total", ax=axs)
-    axs.set_xlabel('Number of possible dependencies', fontsize=20)
-    axs.set_ylabel('Total time [s]', fontsize=20)
+    axs.set_xlabel("Number of possible dependencies", fontsize=20)
+    axs.set_ylabel("Total time [s]", fontsize=20)
     fig.savefig(args.output)
 
 
 def _plot_histogram(args):
     # Data analysis
-    df = pd.read_csv(args.csvfile, header=None, names=['pkg', 'cfg', 'iter', 'setup', 'load', 'ground', 'solve', 'total', 'ndeps'])
+    df = pd.read_csv(
+        args.csvfile,
+        header=None,
+        names=[
+            "pkg",
+            "cfg",
+            "iter",
+            "setup",
+            "load",
+            "ground",
+            "solve",
+            "total",
+            "ndeps",
+        ],
+    )
     print(df.head())
 
-    cfg_ls = list(sorted(set(df['cfg'])))
-    pkg_ls = list(sorted(set(df['pkg'])))
+    cfg_ls = list(sorted(set(df["cfg"])))
+    pkg_ls = list(sorted(set(df["pkg"])))
     timings = {}
     for cf in cfg_ls:
         timings[cf] = {}
         for ph in SOLUTION_PHASES:
             timings[cf][ph] = []
         for pk in pkg_ls:
-            tmp_df = df[df['pkg'] == pk]
-            tdf = tmp_df[tmp_df['cfg'] == cf]
+            tmp_df = df[df["pkg"] == pk]
+            tdf = tmp_df[tmp_df["cfg"] == cf]
             for ph in SOLUTION_PHASES:
                 timings[cf][ph].append(tdf[ph].median())
 
     for cf in cfg_ls:
-        fig, axs = plt.subplots(2, 2, sharey=True, tight_layout=True, figsize=(20,20), dpi=100)
+        fig, axs = plt.subplots(2, 2, sharey=True, tight_layout=True, figsize=(20, 20), dpi=100)
         axes = list(axs.flatten())
         n_bins = 150
 
@@ -191,10 +266,8 @@ def _plot_histogram(args):
             tab.auto_set_column_width(col=[0, 1])
             tab.set_fontsize(12)
     plt.savefig(args.output, dpi=150)
-    
+
+
 def solve_benchmark(parser, args):
-    action = {
-        'run': run,
-        'plot': plot
-    }
+    action = {"run": run, "plot": plot}
     return action[args.subcommand](args)
