@@ -21,6 +21,10 @@ SOLUTION_PHASES = "setup", "load", "ground", "solve"
 VALID_CONFIGURATIONS = "tweety", "handy", "trendy", "many"
 
 
+level = "long"
+section = "developer"
+description = "benchmark concretization speed"
+
 def setup_parser(subparser):
     sp = subparser.add_subparsers(metavar="SUBCOMMAND", dest="subcommand")
 
