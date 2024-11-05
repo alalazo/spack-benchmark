@@ -5,10 +5,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-working_directory = pathlib.Path("/tmp/versions")
+working_directory = pathlib.Path("/tmp/benchmark")
 
-reference_csv = working_directory / "radiuss-develop.csv"
-candidate_csv = working_directory / "radiuss-versions.csv"
+reference_csv = working_directory / "radiuss.develop.csv"
+candidate_csv = working_directory / "radiuss.pr.csv"
 
 figure = "radiuss.png"
 
@@ -58,14 +58,15 @@ print(merge_df.head())
 
 cols = [
     ("pkg", "setup_base", "setup_target"),
+    ("pkg", "load_base", "load_target"),
     ("pkg", "ground_base", "ground_target"),
     ("pkg", "solve_base", "solve_target"),
     ("pkg", "total_base", "total_target"),
 ]
 titles = [
-    "Setup", "Ground", "Solve", "Total"
+    "Setup", "Load", "Ground", "Solve", "Total"
 ]
-fig, axes = plt.subplots(1, 4, sharex=True, sharey=True, figsize=(128, 32), layout="constrained")
+fig, axes = plt.subplots(1, 5, sharex=True, sharey=True, figsize=(160, 32), layout="constrained")
 for ax, keys, title in zip(axes, cols, titles):
     current = merge_df.loc[: , keys]
     current.plot(
@@ -76,7 +77,7 @@ for ax, keys, title in zip(axes, cols, titles):
         title=title,
         grid=True
     )
-    ax.set(xlabel=None, ylabel="Time [sec.]", ylim=[0, 41])
+    ax.set(xlabel=None, ylabel="Time [sec.]", ylim=[0, 51])
     ax.legend(["develop", "PR"])
     plt.setp(ax.get_xticklabels(), rotation=45, horizontalalignment='right')
 

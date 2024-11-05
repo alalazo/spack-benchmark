@@ -1,0 +1,6 @@
+hdf5++shared++mpi
+trilinos++shared++debug++mpi
+paraview++mpi++shared
+trilinos ++mpi ^hdf5++shared
+trilinos ++mpi ^hdf5++shared ^openblas++pic
+trilinos++shared++debug++mpi ^hdf5++shared++mpi ^openblas++pic

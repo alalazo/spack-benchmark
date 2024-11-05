@@ -7,15 +7,18 @@ import glob
 import os
 import re
 import sys
+import time
 import warnings
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import tqdm.contrib.concurrent
 
 import spack.cmd
 import spack.solver.asp as asp
+import spack.util.parallel
+
+from llnl.util import tty
 
 SOLUTION_PHASES = "setup", "load", "ground", "solve"
 VALID_CONFIGURATIONS = "tweety", "handy", "trendy", "many"
@@ -80,11 +83,12 @@ def process_single_item(inputs):
     # control.configuration.configuration = cf
     solver = spack.solver.asp.Solver()
     setup = spack.solver.asp.SpackSolverSetup()
-    reusable_specs = solver._reusable_specs(specs)
+    reusable_specs = solver.selector.reusable_specs(specs)
     try:
         sol_res, timer, solve_stat = solver.driver.solve(
             setup, specs, reuse=reusable_specs, control=control
         )
+        possible_deps = sol_res.possible_dependencies
         timer.stop()
         time_by_phase = tuple(timer.duration(ph) for ph in SOLUTION_PHASES)
     except Exception as e:
@@ -92,7 +96,7 @@ def process_single_item(inputs):
         return None
 
     total = sum(time_by_phase)
-    return (specs[0].name, cf, i) + time_by_phase + (total, len(sol_res.possible_dependencies))
+    return (str(specs[0]), cf, i) + time_by_phase + (total, len(possible_deps))
 
 
 def run(args):
@@ -107,9 +111,8 @@ def run(args):
     specs = spack.cmd.parse_specs("hdf5")
     solver = spack.solver.asp.Solver()
     setup = spack.solver.asp.SpackSolverSetup()
-
     result, _, _ = solver.driver.solve(setup, specs, reuse=[])
-    reusable_specs = solver._reusable_specs(specs)
+    reusable_specs = solver.selector.reusable_specs(specs)
 
     # Read the list of specs to be analyzed
     with open(args.specfile, "r") as f:
@@ -124,19 +127,32 @@ def run(args):
             for i in range(args.repetitions):
                 item = (args, specs, idx, cf, i)
                 input_list.append(item)
-    # Perform the concretization tests
-    # pkg_stats = tqdm.contrib.concurrent.process_map(process_single_item, input_list, max_workers=args.nprocess, chunksize=1)
 
+    start = time.time()
     pkg_stats = []
-    for idx, item in enumerate(input_list):
-        print(f"{idx}/{len(input_list)} {item[1]}")
-        record = process_single_item(item)
-        if record is not None:
-            pkg_stats.append(record)
-
-    # pkg_stats = [process_single_item(item) for item in input_list]
-    # pkg_stats = [x for x in pkg_stats if x is not None]
-
+    for idx, record in enumerate(
+        spack.util.parallel.imap_unordered(
+            process_single_item,
+            input_list,
+            processes=2,
+            debug=tty.is_debug(),
+            maxtaskperchild=1,
+        )
+    ):
+        duration = record[-2]
+        pkg_stats.append(record)
+        percentage = (idx + 1) / len(input_list) * 100
+        tty.msg(f"{duration:6.1f}s [{percentage:3.0f}%] {record[0]}")
+        sys.stdout.flush()
+    # for idx, input in enumerate(input_list):
+    #     record = process_single_item(input)
+    #     duration = record[-2]
+    #     pkg_stats.append(record)
+    #     percentage = (idx + 1) / len(input_list) * 100
+    #     tty.msg(f"{duration:6.1f}s [{percentage:3.0f}%] {record[0]}")
+    finish = time.time()
+    tty.msg(f"Total elapsed time: {finish - start:.2f} seconds")
+    
     # Write results to CSV file
     with open(args.output, "w", newline="") as f:
         writer = csv.writer(f)
