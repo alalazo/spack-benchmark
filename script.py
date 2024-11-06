@@ -5,10 +5,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-working_directory = pathlib.Path("/tmp/benchmark")
+working_directory = pathlib.Path("/tmp/pandas")
 
-reference_csv = working_directory / "radiuss.develop.csv"
-candidate_csv = working_directory / "radiuss.pr.csv"
+reference_csv = working_directory / "propagate.develop.csv"
+candidate_csv = working_directory / "propagate.pr.csv"
 
 figure = "radiuss.png"
 
@@ -29,6 +29,8 @@ base_df = pd.read_csv(
         "dep_len",
     ],
 )
+base_df["source"] = 0
+
 print(base_df.head())
 target_df = pd.read_csv(
     str(candidate_csv),
@@ -45,37 +47,34 @@ target_df = pd.read_csv(
         "dep_len",
     ],
 )
-
+target_df["source"] = 1
 print(target_df.head())
 
-merge_df = pd.merge(
-    base_df,
-    target_df,
-    on=["pkg"],
-    suffixes=("_base", "_target")
-)
-print(merge_df.head())
+combined = pd.concat([base_df, target_df])
+df = combined.groupby(["pkg", "source"])[["setup", "load", "ground", "solve", "total"]].describe()
+print(df)
 
-cols = [
-    ("pkg", "setup_base", "setup_target"),
-    ("pkg", "load_base", "load_target"),
-    ("pkg", "ground_base", "ground_target"),
-    ("pkg", "solve_base", "solve_target"),
-    ("pkg", "total_base", "total_target"),
-]
+cols = ["setup", "load", "ground", "solve", "total"]
 titles = [
     "Setup", "Load", "Ground", "Solve", "Total"
 ]
 fig, axes = plt.subplots(1, 5, sharex=True, sharey=True, figsize=(160, 32), layout="constrained")
-for ax, keys, title in zip(axes, cols, titles):
-    current = merge_df.loc[: , keys]
+for ax, level, title in zip(axes, cols, titles):
+    current = df.unstack(level="source").loc[:, (level, "mean", 0):(level, "mean", 1)]
+
+    negvals  = current.to_numpy().T - df.unstack(level="source").loc[:, (level, "min", 0):(level, "min", 1)].to_numpy().T
+    posvals  = df.unstack(level="source").loc[:, (level, "max", 0):(level, "max", 1)].to_numpy().T - current.to_numpy().T
+
     current.plot(
-        x="pkg",
         ax=ax,
         kind="bar",
-        width=.6,
+        width=.9,
         title=title,
-        grid=True
+        grid=True,
+        yerr=[negvals, posvals],
+        capsize=20,
+        error_kw={"capthick":4, "elinewidth": 2},
+        alpha=0.7
     )
     ax.set(xlabel=None, ylabel="Time [sec.]", ylim=[0, 51])
     ax.legend(["develop", "PR"])

@@ -6,6 +6,7 @@ import csv
 import glob
 import os
 import re
+import pathlib
 import sys
 import time
 import warnings
@@ -54,7 +55,7 @@ def setup_parser(subparser):
         default=os.cpu_count(),
         type=int,
     )
-    run.add_argument("specfile", help="text file with one spec per line")
+    run.add_argument("specfile", help="text file with one spec per line, can be one of the predefined benchmarks")
 
     plot = sp.add_parser("plot", help="plot results recorded in a CSV file")
     plot_type = plot.add_mutually_exclusive_group()
@@ -115,8 +116,13 @@ def run(args):
     reusable_specs = solver.selector.reusable_specs(specs)
 
     # Read the list of specs to be analyzed
-    with open(args.specfile, "r") as f:
-        lines = f.readlines()
+    current_file = pathlib.Path(args.specfile)
+    if not current_file.exists():
+        current_dir = pathlib.Path(__file__ ).parent
+        current_file = current_dir / "data" / f"{args.specfile}.txt"
+        # TODO: error handling
+
+    lines = current_file.read_text().split("\n")
     pkg_ls = [l.strip() for l in lines if l.strip()]
 
     # Perform the concretization tests
